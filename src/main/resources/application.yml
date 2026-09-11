@@ -21,3 +21,13 @@ spring:
 services:
   movie-service:
     url: ${MOVIE_SERVICE_URL:http://localhost:8082}
+
+# Actuator - healthcheck para Docker
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
