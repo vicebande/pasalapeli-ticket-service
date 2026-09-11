@@ -35,6 +35,9 @@ public class Ticket {
     @Column(name = "funcion_id", nullable = false)
     private Long funcionId;
 
+    @Column(nullable = false)
+    private int cantidad;
+
     @OneToOne(mappedBy = "ticket", cascade = CascadeType.ALL, orphanRemoval = true)
     private Pago pago;
 }

@@ -66,6 +66,7 @@ public class TicketService {
                 .estado(EstadoTicket.PAGADO)
                 .usuario(usuario)
                 .funcionId(request.getFuncionId())
+                .cantidad(request.getCantidad())
                 .build();
 
         Ticket ticketGuardado = ticketRepository.save(ticket);
@@ -87,7 +88,7 @@ public class TicketService {
 
         log.info("Ticket emitido exitosamente. Código: {}, Pago ID: {}", codigoTicket, pagoGuardado.getId());
 
-        return mapToDTO(ticketGuardado, disponibilidad.getPeliculaTitulo(), disponibilidad.getSala(), request.getCantidad());
+        return mapToDTO(ticketGuardado, disponibilidad.getPeliculaTitulo(), disponibilidad.getSala());
     }
 
     @Transactional(readOnly = true)
@@ -95,7 +96,7 @@ public class TicketService {
         Ticket t = ticketRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Ticket no encontrado con ID: " + id));
         DisponibilidadResponseDTO disp = movieServiceClient.consultarDisponibilidad(t.getFuncionId());
-        return mapToDTO(t, disp.getPeliculaTitulo(), disp.getSala(), 1);
+        return mapToDTO(t, disp.getPeliculaTitulo(), disp.getSala());
     }
 
     @Transactional(readOnly = true)
@@ -103,7 +104,7 @@ public class TicketService {
         Ticket t = ticketRepository.findByCodigo(codigo)
                 .orElseThrow(() -> new ResourceNotFoundException("Ticket no encontrado con código: " + codigo));
         DisponibilidadResponseDTO disp = movieServiceClient.consultarDisponibilidad(t.getFuncionId());
-        return mapToDTO(t, disp.getPeliculaTitulo(), disp.getSala(), 1);
+        return mapToDTO(t, disp.getPeliculaTitulo(), disp.getSala());
     }
 
     @Transactional(readOnly = true)
@@ -112,9 +113,9 @@ public class TicketService {
                 .map(t -> {
                     try {
                         DisponibilidadResponseDTO disp = movieServiceClient.consultarDisponibilidad(t.getFuncionId());
-                        return mapToDTO(t, disp.getPeliculaTitulo(), disp.getSala(), 1);
+                        return mapToDTO(t, disp.getPeliculaTitulo(), disp.getSala());
                     } catch (Exception e) {
-                        return mapToDTO(t, "Película", "Sala", 1);
+                        return mapToDTO(t, "Película", "Sala");
                     }
                 })
                 .collect(Collectors.toList());
@@ -123,11 +124,11 @@ public class TicketService {
     @Transactional(readOnly = true)
     public List<TicketResponseDTO> listarTodos() {
         return ticketRepository.findAll().stream()
-                .map(t -> mapToDTO(t, "Película", "Sala", 1))
+                .map(t -> mapToDTO(t, "Película", "Sala"))
                 .collect(Collectors.toList());
     }
 
-    private TicketResponseDTO mapToDTO(Ticket t, String peliculaTitulo, String sala, int cantidad) {
+    private TicketResponseDTO mapToDTO(Ticket t, String peliculaTitulo, String sala) {
         PagoDTO pagoDto = null;
         if (t.getPago() != null) {
             pagoDto = PagoDTO.builder()
@@ -150,7 +151,7 @@ public class TicketService {
                 .funcionId(t.getFuncionId())
                 .peliculaTitulo(peliculaTitulo)
                 .sala(sala)
-                .cantidad(cantidad)
+                .cantidad(t.getCantidad())
                 .pago(pagoDto)
                 .build();
     }

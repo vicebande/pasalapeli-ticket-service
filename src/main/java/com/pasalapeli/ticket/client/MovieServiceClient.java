@@ -28,6 +28,9 @@ public class MovieServiceClient {
         try {
             log.info("Consultando disponibilidad en Movie Service: {}", url);
             ResponseEntity<DisponibilidadResponseDTO> resp = restTemplate.getForEntity(url, DisponibilidadResponseDTO.class);
+            if (resp.getBody() == null) {
+                throw new IllegalStateException("Movie Service respondió sin cuerpo en disponibilidad para función: " + funcionId);
+            }
             return resp.getBody();
         } catch (HttpClientErrorException.NotFound e) {
             throw new ResourceNotFoundException("Función no encontrada en Movie Service con ID: " + funcionId);
