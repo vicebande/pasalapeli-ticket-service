@@ -114,21 +114,23 @@ public class TicketService {
                 .orElseThrow(() -> new ResourceNotFoundException("Ticket no encontrado con ID: " + id));
 
         if (t.getEstado() != EstadoTicket.PAGADO) {
-            throw new TicketYaDevueltoException("El ticket " + t.getCodigo() + " ya fue devuelto o no puede devolverse (estado: " + t.getEstado() + ").");
+            throw new TicketYaDevueltoException("El ticket " + t.getCodigo() + " no puede devolverse (estado: " + t.getEstado() + ").");
         }
 
         // Liberar los asientos en Movie Service (repone cupos con lock pesimista)
         movieServiceClient.reponerEntradas(t.getFuncionId(), t.getCantidad());
 
-        // Marcar el ticket como devuelto (CANCELADO) dentro de la misma transacción
-        t.setEstado(EstadoTicket.CANCELADO);
-        Ticket devuelto = ticketRepository.save(t);
+        // Construir la respuesta ANTES de eliminar: la devolución elimina el ticket
+        // de forma definitiva (y su pago por cascada) para que no aparezca en "Mis Entradas".
+        DisponibilidadResponseDTO disp = movieServiceClient.consultarDisponibilidad(t.getFuncionId());
+        TicketResponseDTO devueltoDTO = mapToDTO(t, disp.getPeliculaTitulo(), disp.getSala());
 
-        log.info("Ticket {} devuelto correctamente. Se liberaron {} entradas de la función {}.",
-                devuelto.getCodigo(), devuelto.getCantidad(), devuelto.getFuncionId());
+        ticketRepository.delete(t);
 
-        DisponibilidadResponseDTO disp = movieServiceClient.consultarDisponibilidad(devuelto.getFuncionId());
-        return mapToDTO(devuelto, disp.getPeliculaTitulo(), disp.getSala());
+        log.info("Ticket {} devuelto y eliminado definitivamente. Se liberaron {} entradas de la función {}.",
+                t.getCodigo(), t.getCantidad(), t.getFuncionId());
+
+        return devueltoDTO;
     }
 
     @Transactional(readOnly = true)
