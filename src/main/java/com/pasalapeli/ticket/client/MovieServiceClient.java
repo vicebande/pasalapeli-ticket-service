@@ -58,4 +58,20 @@ public class MovieServiceClient {
             throw new RuntimeException("Fallo al actualizar disponibilidad en Movie Service: " + e.getMessage());
         }
     }
+
+    public void reponerEntradas(Long funcionId, int cantidad) {
+        String url = String.format("%s/api/funciones/%d/reponer?cantidad=%d", movieServiceUrl, funcionId, cantidad);
+        try {
+            log.info("Solicitando reposición de {} entradas en Movie Service: {}", cantidad, url);
+            restTemplate.exchange(url, HttpMethod.PUT, null, DisponibilidadResponseDTO.class);
+        } catch (HttpClientErrorException e) {
+            if (e.getStatusCode() == HttpStatus.NOT_FOUND) {
+                throw new ResourceNotFoundException("Función no encontrada para reponer entradas.");
+            }
+            throw new RuntimeException("Error en Movie Service al reponer entradas: " + e.getMessage());
+        } catch (Exception e) {
+            log.error("Error al reponer entradas en Movie Service: {}", e.getMessage());
+            throw new RuntimeException("Fallo al reponer disponibilidad en Movie Service: " + e.getMessage());
+        }
+    }
 }

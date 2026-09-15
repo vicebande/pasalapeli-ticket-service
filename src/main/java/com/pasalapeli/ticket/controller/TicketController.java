@@ -35,6 +35,12 @@ public class TicketController {
         return ResponseEntity.ok(ticketService.obtenerPorCodigo(codigo));
     }
 
+    @PostMapping("/{id}/devolver")
+    public ResponseEntity<TicketResponseDTO> devolverTicket(@PathVariable Long id) {
+        TicketResponseDTO respuesta = ticketService.devolverTicket(id);
+        return ResponseEntity.ok(respuesta);
+    }
+
     @GetMapping("/usuario/{usuarioId}")
     public ResponseEntity<List<TicketResponseDTO>> listarPorUsuario(@PathVariable Long usuarioId) {
         return ResponseEntity.ok(ticketService.listarPorUsuario(usuarioId));
