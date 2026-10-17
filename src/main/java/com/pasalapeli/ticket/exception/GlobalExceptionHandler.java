@@ -55,6 +55,18 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(err);
     }
 
+    @ExceptionHandler(DevolucionNoPermitidaException.class)
+    public ResponseEntity<ErrorResponse> handleDevolucionNoPermitida(DevolucionNoPermitidaException ex) {
+        // Requerimiento: devolucion permitida solo hasta 1 hora antes de la funcion (409 Conflict)
+        ErrorResponse err = ErrorResponse.builder()
+                .status(HttpStatus.CONFLICT.value())
+                .error("Conflict")
+                .message(ex.getMessage())
+                .timestamp(LocalDateTime.now())
+                .build();
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(err);
+    }
+
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<Map<String, Object>> handleValidationErrors(MethodArgumentNotValidException ex) {
         Map<String, String> errors = new HashMap<>();

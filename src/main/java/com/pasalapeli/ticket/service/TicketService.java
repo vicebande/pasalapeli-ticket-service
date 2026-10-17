@@ -7,6 +7,7 @@ import com.pasalapeli.ticket.dto.PagoDTO;
 import com.pasalapeli.ticket.dto.TicketResponseDTO;
 import com.pasalapeli.ticket.entity.*;
 import com.pasalapeli.ticket.event.EventoNotificacion;
+import com.pasalapeli.ticket.exception.DevolucionNoPermitidaException;
 import com.pasalapeli.ticket.exception.InsufficientTicketsException;
 import com.pasalapeli.ticket.exception.ResourceNotFoundException;
 import com.pasalapeli.ticket.exception.TicketYaDevueltoException;
@@ -25,6 +26,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -194,6 +196,20 @@ public class TicketService {
         // Construir la respuesta ANTES de eliminar: la devolución elimina el ticket
         // de forma definitiva (y su pago por cascada) para que no aparezca en "Mis Entradas".
         DisponibilidadResponseDTO disp = movieServiceClient.consultarDisponibilidad(t.getFuncionId());
+
+        // Ventana de devolución: solo hasta 1 hora antes del inicio de la función.
+        // Los horarios se ingresan en hora local de Chile (wall-time), por eso se compara
+        // con la hora actual de America/Santiago y no con la UTC del servidor.
+        if (disp.getFecha() != null && disp.getHora() != null) {
+            LocalDateTime inicioFuncion = LocalDateTime.of(disp.getFecha(), disp.getHora());
+            LocalDateTime ahora = LocalDateTime.now(ZoneId.of("America/Santiago"));
+            if (ahora.isAfter(inicioFuncion.minusHours(1))) {
+                throw new DevolucionNoPermitidaException(
+                        "La devolución solo se permite hasta 1 hora antes del inicio de la función (inicio: "
+                                + disp.getFecha() + " " + disp.getHora() + ").");
+            }
+        }
+
         TicketResponseDTO devueltoDTO = mapToDTO(t, disp.getPeliculaTitulo(), disp.getSala());
 
         // 1. Eliminar localmente PRIMERO (y forzar el DELETE dentro de la transaccion):
