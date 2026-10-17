@@ -38,6 +38,10 @@ public class Ticket {
     @Column(nullable = false)
     private int cantidad;
 
+    /** Clave opcional de idempotencia enviada por el cliente (header Idempotency-Key). */
+    @Column(name = "idempotency_key", length = 64)
+    private String idempotencyKey;
+
     @OneToOne(mappedBy = "ticket", cascade = CascadeType.ALL, orphanRemoval = true)
     private Pago pago;
 }

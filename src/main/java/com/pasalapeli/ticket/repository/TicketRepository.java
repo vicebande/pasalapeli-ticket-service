@@ -11,5 +11,6 @@ import java.util.Optional;
 public interface TicketRepository extends JpaRepository<Ticket, Long> {
     Optional<Ticket> findByCodigo(String codigo);
     List<Ticket> findByUsuarioIdOrderByFechaCompraDesc(Long usuarioId);
-    List<Ticket> findByFuncionId(Long funcionId);
+
+    Optional<Ticket> findByUsuarioIdAndFuncionIdAndIdempotencyKey(Long usuarioId, Long funcionId, String idempotencyKey);
 }

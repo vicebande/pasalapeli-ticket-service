@@ -16,12 +16,19 @@ import com.pasalapeli.ticket.repository.TicketRepository;
 import com.pasalapeli.ticket.repository.UsuarioRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -36,8 +43,28 @@ public class TicketService {
     private final MovieServiceClient movieServiceClient;
     private final NotificacionEventPublisher notificacionEventPublisher;
 
+    /**
+     * Verifica que el usuario autenticado (correo/principal) pueda operar sobre los tickets
+     * de usuarioId, o que sea ADMIN. Lanza 401/403/404 segun corresponda.
+     */
+    public void verificarAccesoAUsuario(Authentication authentication, Long usuarioId) {
+        if (authentication == null || authentication.getName() == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Autenticacion requerida");
+        }
+        boolean esAdmin = authentication.getAuthorities().stream()
+                .anyMatch(a -> "ROLE_ADMIN".equals(a.getAuthority()));
+        if (esAdmin) {
+            return;
+        }
+        Usuario usuario = usuarioRepository.findById(usuarioId)
+                .orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado con ID: " + usuarioId));
+        if (!authentication.getName().equalsIgnoreCase(usuario.getCorreo())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "No tiene permiso para acceder a los tickets de este usuario");
+        }
+    }
+
     @Transactional
-    public TicketResponseDTO procesarCompra(ComprarTicketRequestDTO request) {
+    public TicketResponseDTO procesarCompra(ComprarTicketRequestDTO request, String idempotencyKey) {
         log.info("Iniciando compra de ticket para usuario ID: {} en función ID: {}",
                 request.getUsuarioId(), request.getFuncionId());
 
@@ -45,7 +72,20 @@ public class TicketService {
         Usuario usuario = usuarioRepository.findById(request.getUsuarioId())
                 .orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado con ID: " + request.getUsuarioId()));
 
-        // 2. Consultar disponibilidad en tiempo real con Movie Service (Flujo de secuencia)
+        // 2. Idempotencia opcional: si ya existe un ticket con esta clave, devolverlo sin descontar stock
+        String claveNormalizada = normalizarClave(idempotencyKey);
+        if (claveNormalizada != null) {
+            Optional<Ticket> previo = ticketRepository
+                    .findByUsuarioIdAndFuncionIdAndIdempotencyKey(request.getUsuarioId(), request.getFuncionId(), claveNormalizada);
+            if (previo.isPresent()) {
+                log.info("Replay idempotente: ticket {} ya existe para la clave {}. No se descuenta stock.",
+                        previo.get().getCodigo(), claveNormalizada);
+                DisponibilidadResponseDTO disp = movieServiceClient.consultarDisponibilidad(request.getFuncionId());
+                return mapToDTO(previo.get(), disp.getPeliculaTitulo(), disp.getSala());
+            }
+        }
+
+        // 3. Consultar disponibilidad en tiempo real con Movie Service (Flujo de secuencia)
         DisponibilidadResponseDTO disponibilidad = movieServiceClient.consultarDisponibilidad(request.getFuncionId());
 
         if (!disponibilidad.isDisponible() || disponibilidad.getEntradasDisponibles() < request.getCantidad()) {
@@ -56,54 +96,74 @@ public class TicketService {
             );
         }
 
-        // 3. Descontar stock en Movie Service
+        // 4. Descontar stock en Movie Service
         movieServiceClient.descontarEntradas(request.getFuncionId(), request.getCantidad());
 
-        // 4. Generar código único de ticket
-        String codigoTicket = "PLP-" + LocalDateTime.now().getYear() + "-" +
-                UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        // Todo lo que sigue ocurre YA CON EL STOCK DESCONTADO: si algo falla, hay que compensar.
+        try {
+            // 5. Generar código único de ticket
+            String codigoTicket = "PLP-" + LocalDateTime.now().getYear() + "-" +
+                    UUID.randomUUID().toString().substring(0, 8).toUpperCase();
 
-        // 5. Crear y guardar Ticket
-        Ticket ticket = Ticket.builder()
-                .fechaCompra(LocalDateTime.now())
-                .codigo(codigoTicket)
-                .estado(EstadoTicket.PAGADO)
-                .usuario(usuario)
-                .funcionId(request.getFuncionId())
-                .cantidad(request.getCantidad())
-                .build();
+            // 6. Crear y guardar Ticket (nace PENDIENTE; pasa a PAGADO tras el pago simulado)
+            Ticket ticket = Ticket.builder()
+                    .fechaCompra(LocalDateTime.now())
+                    .codigo(codigoTicket)
+                    .estado(EstadoTicket.PENDIENTE)
+                    .usuario(usuario)
+                    .funcionId(request.getFuncionId())
+                    .cantidad(request.getCantidad())
+                    .idempotencyKey(claveNormalizada)
+                    .build();
 
-        Ticket ticketGuardado = ticketRepository.save(ticket);
+            Ticket ticketGuardado = ticketRepository.save(ticket);
 
-        // 6. Procesar pago simulado
-        BigDecimal montoUnitario = disponibilidad.getPrecio() != null ? disponibilidad.getPrecio() : BigDecimal.ZERO;
-        BigDecimal montoTotal = montoUnitario.multiply(BigDecimal.valueOf(request.getCantidad()));
+            // 7. Procesar pago simulado
+            BigDecimal montoUnitario = disponibilidad.getPrecio() != null ? disponibilidad.getPrecio() : BigDecimal.ZERO;
+            BigDecimal montoTotal = montoUnitario.multiply(BigDecimal.valueOf(request.getCantidad()));
 
-        Pago pago = Pago.builder()
-                .monto(montoTotal)
-                .metodo(request.getMetodoPago().toUpperCase())
-                .estado(EstadoPago.APROBADO)
-                .fechaPago(LocalDateTime.now())
-                .ticket(ticketGuardado)
-                .build();
+            Pago pago = Pago.builder()
+                    .monto(montoTotal)
+                    .metodo(request.getMetodoPago().toUpperCase())
+                    .estado(EstadoPago.APROBADO)
+                    .fechaPago(LocalDateTime.now())
+                    .ticket(ticketGuardado)
+                    .build();
 
-        Pago pagoGuardado = pagoRepository.save(pago);
-        ticketGuardado.setPago(pagoGuardado);
+            Pago pagoGuardado = pagoRepository.save(pago);
+            ticketGuardado.setPago(pagoGuardado);
 
-        log.info("Ticket emitido exitosamente. Código: {}, Pago ID: {}", codigoTicket, pagoGuardado.getId());
+            // Transicion explicita de estado tras el pago simulado
+            ticketGuardado.setEstado(EstadoTicket.PAGADO);
+            ticketRepository.save(ticketGuardado);
 
-        // Evento asincronico: notifica al comprador que su ticket fue pagado.
-        notificacionEventPublisher.publicar(EventoNotificacion.builder()
-                .tipo("TICKET_PAGADO")
-                .usuarioId(usuario.getId())
-                .tituloPelicula(disponibilidad.getPeliculaTitulo())
-                .codigoTicket(codigoTicket)
-                .cantidad(request.getCantidad())
-                .monto(montoTotal)
-                .sala(disponibilidad.getSala())
-                .build());
+            log.info("Ticket emitido exitosamente. Código: {}, Pago ID: {}", codigoTicket, pagoGuardado.getId());
 
-        return mapToDTO(ticketGuardado, disponibilidad.getPeliculaTitulo(), disponibilidad.getSala());
+            // 8. Evento asincronico (AFTER_COMMIT): notifica al comprador que su ticket fue pagado.
+            notificacionEventPublisher.publicar(EventoNotificacion.builder()
+                    .tipo("TICKET_PAGADO")
+                    .usuarioId(usuario.getId())
+                    .tituloPelicula(disponibilidad.getPeliculaTitulo())
+                    .codigoTicket(codigoTicket)
+                    .cantidad(request.getCantidad())
+                    .monto(montoTotal)
+                    .sala(disponibilidad.getSala())
+                    .build());
+
+            return mapToDTO(ticketGuardado, disponibilidad.getPeliculaTitulo(), disponibilidad.getSala());
+
+        } catch (RuntimeException e) {
+            // Compensación: el cupo ya fue descontado en Movie Service; devolverlo al fallar la compra
+            log.warn("Compra fallida tras descontar stock; compensando reposición de {} entradas en la función {}: {}",
+                    request.getCantidad(), request.getFuncionId(), e.getMessage());
+            try {
+                movieServiceClient.reponerEntradas(request.getFuncionId(), request.getCantidad());
+            } catch (RuntimeException ce) {
+                log.error("FALLO DE COMPENSACIÓN: cupo descontado sin ticket para la función {}",
+                        request.getFuncionId(), ce);
+            }
+            throw e;
+        }
     }
 
     @Transactional(readOnly = true)
@@ -131,15 +191,21 @@ public class TicketService {
             throw new TicketYaDevueltoException("El ticket " + t.getCodigo() + " no puede devolverse (estado: " + t.getEstado() + ").");
         }
 
-        // Liberar los asientos en Movie Service (repone cupos con lock pesimista)
-        movieServiceClient.reponerEntradas(t.getFuncionId(), t.getCantidad());
-
         // Construir la respuesta ANTES de eliminar: la devolución elimina el ticket
         // de forma definitiva (y su pago por cascada) para que no aparezca en "Mis Entradas".
         DisponibilidadResponseDTO disp = movieServiceClient.consultarDisponibilidad(t.getFuncionId());
         TicketResponseDTO devueltoDTO = mapToDTO(t, disp.getPeliculaTitulo(), disp.getSala());
 
-        // Evento asincronico: notifica al comprador que su ticket fue devuelto.
+        // 1. Eliminar localmente PRIMERO (y forzar el DELETE dentro de la transaccion):
+        //    si la reposición remota falla, el rollback restaura el ticket y no hay
+        //    estado inconsistente (ticket borrado sin cupos liberados).
+        ticketRepository.delete(t);
+        ticketRepository.flush();
+
+        // 2. Reponer los asientos en Movie Service (lock pesimista allá)
+        movieServiceClient.reponerEntradas(t.getFuncionId(), t.getCantidad());
+
+        // 3. Evento asincronico (AFTER_COMMIT): solo se publica si el commit confirma.
         notificacionEventPublisher.publicar(EventoNotificacion.builder()
                 .tipo("TICKET_DEVUELTO")
                 .usuarioId(t.getUsuario() != null ? t.getUsuario().getId() : null)
@@ -149,8 +215,6 @@ public class TicketService {
                 .sala(disp.getSala())
                 .build());
 
-        ticketRepository.delete(t);
-
         log.info("Ticket {} devuelto y eliminado definitivamente. Se liberaron {} entradas de la función {}.",
                 t.getCodigo(), t.getCantidad(), t.getFuncionId());
 
@@ -159,14 +223,23 @@ public class TicketService {
 
     @Transactional(readOnly = true)
     public List<TicketResponseDTO> listarPorUsuario(Long usuarioId) {
+        // Cache de disponibilidad por función: evita N+1 cuando hay varios tickets de la misma función
+        Map<Long, DisponibilidadResponseDTO> cache = new HashMap<>();
         return ticketRepository.findByUsuarioIdOrderByFechaCompraDesc(usuarioId).stream()
                 .map(t -> {
-                    try {
-                        DisponibilidadResponseDTO disp = movieServiceClient.consultarDisponibilidad(t.getFuncionId());
-                        return mapToDTO(t, disp.getPeliculaTitulo(), disp.getSala());
-                    } catch (Exception e) {
-                        return mapToDTO(t, "Película", "Sala");
+                    DisponibilidadResponseDTO disp = cache.get(t.getFuncionId());
+                    if (disp == null) {
+                        try {
+                            disp = movieServiceClient.consultarDisponibilidad(t.getFuncionId());
+                        } catch (Exception e) {
+                            log.warn("No se pudo obtener disponibilidad para la función {}: {}",
+                                    t.getFuncionId(), e.getMessage());
+                        }
+                        cache.put(t.getFuncionId(), disp);
                     }
+                    String titulo = disp != null ? disp.getPeliculaTitulo() : null;
+                    String sala = disp != null ? disp.getSala() : null;
+                    return mapToDTO(t, titulo, sala);
                 })
                 .collect(Collectors.toList());
     }
@@ -174,8 +247,16 @@ public class TicketService {
     @Transactional(readOnly = true)
     public List<TicketResponseDTO> listarTodos() {
         return ticketRepository.findAll().stream()
-                .map(t -> mapToDTO(t, "Película", "Sala"))
+                .map(t -> mapToDTO(t, null, null))
                 .collect(Collectors.toList());
+    }
+
+    private String normalizarClave(String idempotencyKey) {
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            return null;
+        }
+        String limpia = idempotencyKey.trim();
+        return limpia.length() > 64 ? limpia.substring(0, 64) : limpia;
     }
 
     private TicketResponseDTO mapToDTO(Ticket t, String peliculaTitulo, String sala) {

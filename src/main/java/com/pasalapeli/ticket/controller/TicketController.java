@@ -7,6 +7,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -14,14 +15,15 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/tickets")
 @RequiredArgsConstructor
-@CrossOrigin(origins = "*")
 public class TicketController {
 
     private final TicketService ticketService;
 
     @PostMapping("/comprar")
-    public ResponseEntity<TicketResponseDTO> comprarTicket(@Valid @RequestBody ComprarTicketRequestDTO request) {
-        TicketResponseDTO respuesta = ticketService.procesarCompra(request);
+    public ResponseEntity<TicketResponseDTO> comprarTicket(
+            @Valid @RequestBody ComprarTicketRequestDTO request,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
+        TicketResponseDTO respuesta = ticketService.procesarCompra(request, idempotencyKey);
         return ResponseEntity.status(HttpStatus.CREATED).body(respuesta);
     }
 
@@ -42,12 +44,16 @@ public class TicketController {
     }
 
     @GetMapping("/usuario/{usuarioId}")
-    public ResponseEntity<List<TicketResponseDTO>> listarPorUsuario(@PathVariable Long usuarioId) {
+    public ResponseEntity<List<TicketResponseDTO>> listarPorUsuario(@PathVariable Long usuarioId,
+                                                                    Authentication authentication) {
+        // IDOR: solo el dueño (correo == principal) o un ADMIN puede ver el historial
+        ticketService.verificarAccesoAUsuario(authentication, usuarioId);
         return ResponseEntity.ok(ticketService.listarPorUsuario(usuarioId));
     }
 
     @GetMapping
     public ResponseEntity<List<TicketResponseDTO>> listarTodos() {
+        // Restringido a ADMIN en SecurityConfig
         return ResponseEntity.ok(ticketService.listarTodos());
     }
 }

@@ -1,5 +1,6 @@
 package com.pasalapeli.ticket.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -22,6 +23,8 @@ public class Usuario {
     @Column(nullable = false, unique = true, length = 100)
     private String correo;
 
+    /** Nunca se serializa: autenticacion delegada en Azure AD / BFF. */
+    @JsonIgnore
     @Column(nullable = false, length = 255)
     private String password;
 

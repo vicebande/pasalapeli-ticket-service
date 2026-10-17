@@ -15,6 +15,8 @@ public class RestClientConfig {
         return builder
                 .setConnectTimeout(Duration.ofSeconds(5))
                 .setReadTimeout(Duration.ofSeconds(10))
+                // Reenvia Authorization / X-Dev-User-* a Movie Service (descontar, reponer, disponibilidad)
+                .additionalInterceptors(new RequestHeaderRelayInterceptor())
                 .build();
     }
 }

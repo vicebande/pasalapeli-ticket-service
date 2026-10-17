@@ -35,11 +35,13 @@ Microservicio encargado de la orquestación de compras de tickets, pagos simulad
 ---
 
 ## 📡 Endpoints Principales
-- `POST /api/tickets/comprar`: Procesa compra de entradas.
+- `POST /api/tickets/comprar`: Procesa compra de entradas. Acepta header opcional `Idempotency-Key` (reintentos seguros sin descontar cupo dos veces).
 - `GET /api/tickets/{id}`: Detalle de ticket por ID.
 - `GET /api/tickets/codigo/{codigo}`: Busca ticket por su código digital único.
-- `GET /api/tickets/usuario/{usuarioId}`: Historial de compras de un usuario.
+- `GET /api/tickets/usuario/{usuarioId}`: Historial de compras de un usuario (solo el dueño o Admin).
+- `POST /api/tickets/{id}/devolver`: Devuelve un ticket pagado y libera el cupo en Movie Service.
 - `GET /api/tickets`: Lista todos los tickets (Admin).
+- `POST /api/usuarios/ensure`: Crea/recupera un usuario por correo (lo llama el BFF al hacer login; autenticado).
 
 ---
 
@@ -83,11 +85,12 @@ En cada `push` a `main`:
 
 ## 🔔 Mensajería asincrónica (productor)
 
-`TicketService` publica eventos en el exchange *topic* `pasalapeli.events` (RabbitMQ) que consume el **[Notification Service](https://github.com)**:
+`TicketService` publica eventos en el topic **AWS SNS** `pasalapeli-events` que consume el **[Notification Service](https://github.com)** (cola SQS):
 
 - **`TICKET_PAGADO`**: al confirmar una compra (notifica al comprador).
 - **`TICKET_DEVUELTO`**: al procesar una devolución (notifica al comprador).
 
-- El envío ocurre **después de confirmar la transacción** (`@TransactionalEventListener(AFTER_COMMIT)`) y es **best-effort** (un fallo del broker no rompe la compra/devolución).
-- Clases: `event/EventoNotificacion.java`, `messaging/NotificacionEventPublisher.java`, `config/RabbitProducerConfig.java`.
-- Variables: `SPRING_RABBITMQ_HOST=rabbitmq`, `SPRING_RABBITMQ_PORT=5672`, `SPRING_RABBITMQ_USERNAME`, `SPRING_RABBITMQ_PASSWORD`, `NOTIF_EXCHANGE` (default `pasalapeli.events`).
+- El envío ocurre **después de confirmar la transacción** (`@TransactionalEventListener(AFTER_COMMIT)`) y es **best-effort** (un fallo de SNS no rompe la compra/devolución).
+- El atributo de mensaje `tipo` alimenta el FilterPolicy de la suscripción SNS→SQS.
+- Clases: `event/EventoNotificacion.java`, `messaging/NotificacionEventPublisher.java`.
+- Variables: `SNS_TOPIC_ARN` (salida de `scripts/setup-messaging.sh` del orquestador), `AWS_REGION` (default `us-east-1`). Credenciales via cadena por defecto (IMDS + instance profile en EC2).
