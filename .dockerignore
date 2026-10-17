@@ -1,0 +1,14 @@
+.git
+.gitignore
+target/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+.idea
+*.iml
+.vscode/
+*.md
+*.log
+.DS_Store
+Thumbs.db
+.github/
