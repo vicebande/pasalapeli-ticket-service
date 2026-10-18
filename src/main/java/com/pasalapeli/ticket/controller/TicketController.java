@@ -28,17 +28,24 @@ public class TicketController {
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<TicketResponseDTO> obtenerPorId(@PathVariable Long id) {
-        return ResponseEntity.ok(ticketService.obtenerPorId(id));
+    public ResponseEntity<TicketResponseDTO> obtenerPorId(@PathVariable Long id, Authentication authentication) {
+        TicketResponseDTO ticket = ticketService.obtenerPorId(id);
+        // Defensa en profundidad: ademas del BFF, el dueño (o ADMIN) debe ser el autenticado
+        ticketService.verificarAccesoAUsuario(authentication, ticket.getUsuarioId());
+        return ResponseEntity.ok(ticket);
     }
 
     @GetMapping("/codigo/{codigo}")
-    public ResponseEntity<TicketResponseDTO> obtenerPorCodigo(@PathVariable String codigo) {
-        return ResponseEntity.ok(ticketService.obtenerPorCodigo(codigo));
+    public ResponseEntity<TicketResponseDTO> obtenerPorCodigo(@PathVariable String codigo, Authentication authentication) {
+        TicketResponseDTO ticket = ticketService.obtenerPorCodigo(codigo);
+        ticketService.verificarAccesoAUsuario(authentication, ticket.getUsuarioId());
+        return ResponseEntity.ok(ticket);
     }
 
     @PostMapping("/{id}/devolver")
-    public ResponseEntity<TicketResponseDTO> devolverTicket(@PathVariable Long id) {
+    public ResponseEntity<TicketResponseDTO> devolverTicket(@PathVariable Long id, Authentication authentication) {
+        TicketResponseDTO ticket = ticketService.obtenerPorId(id);
+        ticketService.verificarAccesoAUsuario(authentication, ticket.getUsuarioId());
         TicketResponseDTO respuesta = ticketService.devolverTicket(id);
         return ResponseEntity.ok(respuesta);
     }

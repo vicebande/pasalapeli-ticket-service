@@ -112,9 +112,9 @@ public class TicketService {
 
         // Todo lo que sigue ocurre YA CON EL STOCK DESCONTADO: si algo falla, hay que compensar.
         try {
-            // 5. Generar código único de ticket
+            // 5. Generar código único de ticket (12 hex = ~48 bits de entropia)
             String codigoTicket = "PLP-" + LocalDateTime.now().getYear() + "-" +
-                    UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+                    UUID.randomUUID().toString().replace("-", "").substring(0, 12).toUpperCase();
 
             // 6. Crear y guardar Ticket (nace PENDIENTE; pasa a PAGADO tras el pago simulado)
             Ticket ticket = Ticket.builder()

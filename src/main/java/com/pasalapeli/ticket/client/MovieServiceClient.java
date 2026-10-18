@@ -6,6 +6,8 @@ import com.pasalapeli.ticket.exception.ResourceNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -23,10 +25,13 @@ public class MovieServiceClient {
     @Value("${services.movie-service.url:http://localhost:8082}")
     private String movieServiceUrl;
 
+    @Value("${app.internal-api-token:dev-internal-token}")
+    private String internalApiToken;
+
     public DisponibilidadResponseDTO consultarDisponibilidad(Long funcionId) {
         String url = String.format("%s/api/funciones/%d/disponibilidad", movieServiceUrl, funcionId);
         try {
-            log.info("Consultando disponibilidad en Movie Service: {}", url);
+            log.debug("Consultando disponibilidad en Movie Service: {}", url);
             ResponseEntity<DisponibilidadResponseDTO> resp = restTemplate.getForEntity(url, DisponibilidadResponseDTO.class);
             if (resp.getBody() == null) {
                 throw new IllegalStateException("Movie Service respondió sin cuerpo en disponibilidad para función: " + funcionId);
@@ -43,11 +48,10 @@ public class MovieServiceClient {
     public void descontarEntradas(Long funcionId, int cantidad) {
         String url = String.format("%s/api/funciones/%d/descontar?cantidad=%d", movieServiceUrl, funcionId, cantidad);
         try {
-            log.info("Solicitando descuento de {} entradas en Movie Service: {}", cantidad, url);
-            restTemplate.exchange(url, HttpMethod.PUT, null, DisponibilidadResponseDTO.class);
+            log.debug("Solicitando descuento de {} entradas en Movie Service", cantidad);
+            restTemplate.exchange(url, HttpMethod.PUT, internalEntity(), DisponibilidadResponseDTO.class);
         } catch (HttpClientErrorException e) {
             if (e.getStatusCode() == HttpStatus.CONFLICT) {
-                // Movie Service retornó 409
                 throw new InsufficientTicketsException("No hay entradas disponibles suficientes para completar la compra.");
             } else if (e.getStatusCode() == HttpStatus.NOT_FOUND) {
                 throw new ResourceNotFoundException("Función no encontrada para descontar entradas.");
@@ -62,8 +66,8 @@ public class MovieServiceClient {
     public void reponerEntradas(Long funcionId, int cantidad) {
         String url = String.format("%s/api/funciones/%d/reponer?cantidad=%d", movieServiceUrl, funcionId, cantidad);
         try {
-            log.info("Solicitando reposición de {} entradas en Movie Service: {}", cantidad, url);
-            restTemplate.exchange(url, HttpMethod.PUT, null, DisponibilidadResponseDTO.class);
+            log.debug("Solicitando reposición de {} entradas en Movie Service", cantidad);
+            restTemplate.exchange(url, HttpMethod.PUT, internalEntity(), DisponibilidadResponseDTO.class);
         } catch (HttpClientErrorException e) {
             if (e.getStatusCode() == HttpStatus.NOT_FOUND) {
                 throw new ResourceNotFoundException("Función no encontrada para reponer entradas.");
@@ -73,5 +77,11 @@ public class MovieServiceClient {
             log.error("Error al reponer entradas en Movie Service: {}", e.getMessage());
             throw new RuntimeException("Fallo al reponer disponibilidad en Movie Service: " + e.getMessage());
         }
+    }
+
+    private HttpEntity<Void> internalEntity() {
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("X-Internal-Token", internalApiToken);
+        return new HttpEntity<>(headers);
     }
 }
