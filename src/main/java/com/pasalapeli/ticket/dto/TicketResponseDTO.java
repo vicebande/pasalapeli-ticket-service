@@ -6,7 +6,9 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 
 @Data
 @Builder
@@ -23,6 +25,8 @@ public class TicketResponseDTO {
     private Long funcionId;
     private String peliculaTitulo;
     private String sala;
+    private LocalDate fechaFuncion;
+    private LocalTime horaFuncion;
     private int cantidad;
     private PagoDTO pago;
 }

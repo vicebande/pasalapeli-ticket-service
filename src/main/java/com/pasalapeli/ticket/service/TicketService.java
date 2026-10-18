@@ -19,6 +19,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -83,7 +84,7 @@ public class TicketService {
                 log.info("Replay idempotente: ticket {} ya existe para la clave {}. No se descuenta stock.",
                         previo.get().getCodigo(), claveNormalizada);
                 DisponibilidadResponseDTO disp = movieServiceClient.consultarDisponibilidad(request.getFuncionId());
-                return mapToDTO(previo.get(), disp.getPeliculaTitulo(), disp.getSala());
+                return mapToDTO(previo.get(), disp);
             }
         }
 
@@ -96,6 +97,14 @@ public class TicketService {
                     String.format("Conflicto de disponibilidad: Solicitadas %d, disponibles %d",
                             request.getCantidad(), disponibilidad.getEntradasDisponibles())
             );
+        }
+
+        // Protección de catálogo: no se compran entradas para funciones ya iniciadas o finalizadas
+        if (disponibilidad.getFecha() != null && disponibilidad.getHora() != null
+                && !LocalDateTime.of(disponibilidad.getFecha(), disponibilidad.getHora())
+                        .isAfter(LocalDateTime.now(ZoneId.of("America/Santiago")))) {
+            log.warn("Compra rechazada (409): función {} ya comenzó", request.getFuncionId());
+            throw new InsufficientTicketsException("La función ya comenzó; no es posible comprar entradas.");
         }
 
         // 4. Descontar stock en Movie Service
@@ -152,7 +161,7 @@ public class TicketService {
                     .sala(disponibilidad.getSala())
                     .build());
 
-            return mapToDTO(ticketGuardado, disponibilidad.getPeliculaTitulo(), disponibilidad.getSala());
+            return mapToDTO(ticketGuardado, disponibilidad);
 
         } catch (RuntimeException e) {
             // Compensación: el cupo ya fue descontado en Movie Service; devolverlo al fallar la compra
@@ -173,7 +182,7 @@ public class TicketService {
         Ticket t = ticketRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Ticket no encontrado con ID: " + id));
         DisponibilidadResponseDTO disp = movieServiceClient.consultarDisponibilidad(t.getFuncionId());
-        return mapToDTO(t, disp.getPeliculaTitulo(), disp.getSala());
+        return mapToDTO(t, disp);
     }
 
     @Transactional(readOnly = true)
@@ -181,7 +190,7 @@ public class TicketService {
         Ticket t = ticketRepository.findByCodigo(codigo)
                 .orElseThrow(() -> new ResourceNotFoundException("Ticket no encontrado con código: " + codigo));
         DisponibilidadResponseDTO disp = movieServiceClient.consultarDisponibilidad(t.getFuncionId());
-        return mapToDTO(t, disp.getPeliculaTitulo(), disp.getSala());
+        return mapToDTO(t, disp);
     }
 
     @Transactional
@@ -210,7 +219,7 @@ public class TicketService {
             }
         }
 
-        TicketResponseDTO devueltoDTO = mapToDTO(t, disp.getPeliculaTitulo(), disp.getSala());
+        TicketResponseDTO devueltoDTO = mapToDTO(t, disp);
 
         // 1. Eliminar localmente PRIMERO (y forzar el DELETE dentro de la transaccion):
         //    si la reposición remota falla, el rollback restaura el ticket y no hay
@@ -253,9 +262,7 @@ public class TicketService {
                         }
                         cache.put(t.getFuncionId(), disp);
                     }
-                    String titulo = disp != null ? disp.getPeliculaTitulo() : null;
-                    String sala = disp != null ? disp.getSala() : null;
-                    return mapToDTO(t, titulo, sala);
+                    return mapToDTO(t, disp);
                 })
                 .collect(Collectors.toList());
     }
@@ -263,8 +270,45 @@ public class TicketService {
     @Transactional(readOnly = true)
     public List<TicketResponseDTO> listarTodos() {
         return ticketRepository.findAll().stream()
-                .map(t -> mapToDTO(t, null, null))
+                .map(t -> mapToDTO(t, null))
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * Limpieza programada: elimina los tickets cuya funcion ya termino
+     * (finFuncion <= ahora America/Santiago). El pago se elimina en cascada.
+     * Si Movie Service no responde, el ciclo se omite sin borrar nada
+     * (se reintenta en la proxima ejecucion).
+     */
+    @Scheduled(fixedDelayString = "${app.limpieza.intervalo-ms:300000}",
+            initialDelayString = "${app.limpieza.retraso-inicial-ms:60000}")
+    @Transactional
+    public void purgarTicketsDeFuncionesFinalizadas() {
+        LocalDateTime ahora = LocalDateTime.now(ZoneId.of("America/Santiago"));
+        Map<Long, Boolean> cache = new HashMap<>();
+        int purgados = 0;
+        for (Ticket t : ticketRepository.findAll()) {
+            Boolean terminada = cache.computeIfAbsent(t.getFuncionId(), fid -> funcionTerminada(fid, ahora));
+            if (Boolean.TRUE.equals(terminada)) {
+                ticketRepository.delete(t);
+                purgados++;
+            }
+        }
+        if (purgados > 0) {
+            log.info("Limpieza: {} ticket(s) de funciones finalizadas eliminados (pago en cascada).", purgados);
+        }
+    }
+
+    private boolean funcionTerminada(Long funcionId, LocalDateTime ahora) {
+        try {
+            DisponibilidadResponseDTO disp = movieServiceClient.consultarDisponibilidad(funcionId);
+            LocalDateTime fin = disp.getFinFuncion();
+            return fin != null && !ahora.isBefore(fin);
+        } catch (RuntimeException e) {
+            log.warn("Limpieza: no se pudo consultar la función {} (se omite el ticket, se reintenta en el próximo ciclo): {}",
+                    funcionId, e.getMessage());
+            return false;
+        }
     }
 
     private String normalizarClave(String idempotencyKey) {
@@ -275,7 +319,7 @@ public class TicketService {
         return limpia.length() > 64 ? limpia.substring(0, 64) : limpia;
     }
 
-    private TicketResponseDTO mapToDTO(Ticket t, String peliculaTitulo, String sala) {
+    private TicketResponseDTO mapToDTO(Ticket t, DisponibilidadResponseDTO disp) {
         PagoDTO pagoDto = null;
         if (t.getPago() != null) {
             pagoDto = PagoDTO.builder()
@@ -296,8 +340,10 @@ public class TicketService {
                 .usuarioNombre(t.getUsuario() != null ? t.getUsuario().getNombre() : null)
                 .usuarioCorreo(t.getUsuario() != null ? t.getUsuario().getCorreo() : null)
                 .funcionId(t.getFuncionId())
-                .peliculaTitulo(peliculaTitulo)
-                .sala(sala)
+                .peliculaTitulo(disp != null ? disp.getPeliculaTitulo() : null)
+                .sala(disp != null ? disp.getSala() : null)
+                .fechaFuncion(disp != null ? disp.getFecha() : null)
+                .horaFuncion(disp != null ? disp.getHora() : null)
                 .cantidad(t.getCantidad())
                 .pago(pagoDto)
                 .build();
