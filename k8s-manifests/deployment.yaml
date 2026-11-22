@@ -19,8 +19,17 @@ spec:
         - name: ticket-service
           image: 439738332704.dkr.ecr.us-east-1.amazonaws.com/pasalapeli-images/ticket-service:latest
           ports:
-            - containerPort: 8080
+            - containerPort: 8083
           env:
             - name: ENVIRONMENT
               value: "dev"
+          envFrom:
+            - secretRef:
+                name: pasalapeli-db-secret
+            - secretRef:
+                name: pasalapeli-aws-secret
+            - secretRef:
+                name: pasalapeli-service-urls-secret
+            - secretRef:
+                name: pasalapeli-internal-token-secret
           imagePullPolicy: IfNotPresent
