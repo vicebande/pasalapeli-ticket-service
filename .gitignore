@@ -5,3 +5,7 @@ target/
 .idea
 *.iml
 .vscode/
+
+# Terraform
+.terraform/
+.terraform.lock.hcl

@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: pasalapeli-ticket-service
+  namespace: default
+  labels:
+    app: pasalapeli-ticket-service
+spec:
+  selector:
+    app: pasalapeli-ticket-service
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
+  type: ClusterIP

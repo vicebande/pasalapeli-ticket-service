@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pasalapeli-ticket-service
+  namespace: default
+  labels:
+    app: pasalapeli-ticket-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pasalapeli-ticket-service
+  template:
+    metadata:
+      labels:
+        app: pasalapeli-ticket-service
+    spec:
+      containers:
+        - name: ticket-service
+          image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/pasalapeli-images/ticket-service:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: ENVIRONMENT
+              value: "dev"
+          imagePullPolicy: IfNotPresent
