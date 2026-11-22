@@ -3,6 +3,7 @@ package com.pasalapeli.ticket.controller;
 import com.pasalapeli.ticket.dto.ComprarTicketRequestDTO;
 import com.pasalapeli.ticket.dto.TicketResponseDTO;
 import com.pasalapeli.ticket.service.TicketService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -22,9 +23,23 @@ public class TicketController {
     @PostMapping("/comprar")
     public ResponseEntity<TicketResponseDTO> comprarTicket(
             @Valid @RequestBody ComprarTicketRequestDTO request,
-            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
-        TicketResponseDTO respuesta = ticketService.procesarCompra(request, idempotencyKey);
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            @RequestHeader(value = "X-Forwarded-For", required = false) String forwardedFor,
+            HttpServletRequest servletRequest) {
+        String ipCliente = resolverIpCliente(forwardedFor, servletRequest);
+        TicketResponseDTO respuesta = ticketService.procesarCompra(request, idempotencyKey, ipCliente);
         return ResponseEntity.status(HttpStatus.CREATED).body(respuesta);
+    }
+
+    /**
+     * IP de origen del cliente para la metrica de ventas: primer valor del
+     * X-Forwarded-For (puesto por nginx) o la IP directa de la conexion.
+     */
+    private String resolverIpCliente(String forwardedFor, HttpServletRequest servletRequest) {
+        if (forwardedFor != null && !forwardedFor.isBlank()) {
+            return forwardedFor.split(",")[0].trim();
+        }
+        return servletRequest != null ? servletRequest.getRemoteAddr() : null;
     }
 
     @GetMapping("/{id}")

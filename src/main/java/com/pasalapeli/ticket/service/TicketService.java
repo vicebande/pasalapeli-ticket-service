@@ -7,11 +7,13 @@ import com.pasalapeli.ticket.dto.PagoDTO;
 import com.pasalapeli.ticket.dto.TicketResponseDTO;
 import com.pasalapeli.ticket.entity.*;
 import com.pasalapeli.ticket.event.EventoNotificacion;
+import com.pasalapeli.ticket.event.EventoVenta;
 import com.pasalapeli.ticket.exception.DevolucionNoPermitidaException;
 import com.pasalapeli.ticket.exception.InsufficientTicketsException;
 import com.pasalapeli.ticket.exception.ResourceNotFoundException;
 import com.pasalapeli.ticket.exception.TicketYaDevueltoException;
 import com.pasalapeli.ticket.messaging.NotificacionEventPublisher;
+import com.pasalapeli.ticket.messaging.VentaEventPublisher;
 import com.pasalapeli.ticket.repository.PagoRepository;
 import com.pasalapeli.ticket.repository.TicketRepository;
 import com.pasalapeli.ticket.repository.UsuarioRepository;
@@ -45,6 +47,7 @@ public class TicketService {
     private final UsuarioRepository usuarioRepository;
     private final MovieServiceClient movieServiceClient;
     private final NotificacionEventPublisher notificacionEventPublisher;
+    private final VentaEventPublisher ventaEventPublisher;
 
     /**
      * Verifica que el usuario autenticado (correo/principal) pueda operar sobre los tickets
@@ -67,7 +70,8 @@ public class TicketService {
     }
 
     @Transactional
-    public TicketResponseDTO procesarCompra(ComprarTicketRequestDTO request, String idempotencyKey) {
+    public TicketResponseDTO procesarCompra(ComprarTicketRequestDTO request, String idempotencyKey,
+                                            String ipCliente) {
         log.info("Iniciando compra de ticket para usuario ID: {} en función ID: {}",
                 request.getUsuarioId(), request.getFuncionId());
 
@@ -159,6 +163,18 @@ public class TicketService {
                     .cantidad(request.getCantidad())
                     .monto(montoTotal)
                     .sala(disponibilidad.getSala())
+                    .build());
+
+            // 9. Evento de metricas (AFTER_COMMIT): alimenta stream-ventas para
+            //    el dashboard administrativo en tiempo real (Kinesis -> BFF -> WS).
+            ventaEventPublisher.publicar(EventoVenta.builder()
+                    .tipo("VENTA_COMPLETADA")
+                    .idVenta(ticketGuardado.getId())
+                    .fecha(java.time.OffsetDateTime.now(java.time.ZoneId.of("America/Santiago")).toString())
+                    .monto(montoTotal.longValue())
+                    .producto(disponibilidad.getPeliculaTitulo())
+                    .categoria(disponibilidad.getPeliculaGenero())
+                    .ipCliente(ipCliente)
                     .build());
 
             return mapToDTO(ticketGuardado, disponibilidad);
